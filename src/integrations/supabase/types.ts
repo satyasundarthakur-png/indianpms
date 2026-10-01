@@ -14,7 +14,54 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      stocks: {
+        Row: {
+          buy_date: string
+          buy_price: number
+          buy_stocks: number
+          created_at: string
+          id: string
+          invested_amount: number
+          notes: string | null
+          sell_prediction_price: number | null
+          sell_predictions: Json
+          stock_name: string
+          tags: string[] | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          buy_date?: string
+          buy_price: number
+          buy_stocks: number
+          created_at?: string
+          id?: string
+          invested_amount: number
+          notes?: string | null
+          sell_prediction_price?: number | null
+          sell_predictions?: Json
+          stock_name: string
+          tags?: string[] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Update: {
+          buy_date?: string
+          buy_price?: number
+          buy_stocks?: number
+          created_at?: string
+          id?: string
+          invested_amount?: number
+          notes?: string | null
+          sell_prediction_price?: number | null
+          sell_predictions?: Json
+          stock_name?: string
+          tags?: string[] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
