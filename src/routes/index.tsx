@@ -93,7 +93,7 @@ function Portfolio({ user, dark, toggleTheme }: { user: User; dark: boolean; tog
         const searchResponse = await fetch(`/api/screener?q=${encodeURIComponent(stock.stock_name)}`);
         const matches: Suggestion[] = await searchResponse.json();
         if (!Array.isArray(matches) || !matches.length) return null;
-        const chartResponse = await fetch(`/api/screener?id=${matches[0].id}`);
+        const chartResponse = await fetch(`/api/screener?id=${matches[0]?.id}`);
         const chart = await chartResponse.json();
         const prices = chart?.datasets?.find((d: { metric: string }) => d.metric === 'Price')?.values;
         const latest = prices?.[prices.length - 1];

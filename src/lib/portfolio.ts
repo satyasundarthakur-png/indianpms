@@ -6,7 +6,7 @@ export const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 
 export const number = (value: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value);
 export function targets(stock: Stock): Target[] {
   if (!Array.isArray(stock.sell_predictions)) return [];
-  return stock.sell_predictions.filter((item): item is Target => !!item && typeof item === 'object' && !Array.isArray(item) && typeof item.price === 'number' && typeof item.stocks === 'number' && typeof item.id === 'string');
+  return stock.sell_predictions.filter((item): item is Target => !!item && typeof item === 'object' && !Array.isArray(item) && typeof item['price'] === 'number' && typeof item['stocks'] === 'number' && typeof item['id'] === 'string');
 }
 export function projected(stock: Stock) {
   const plans = targets(stock);
