@@ -1,0 +1,3 @@
+- [x] Inspect uploaded portfolio app and replace insecure sign-in and database access.
+- [x] Bring across holdings, target scenarios, search and price lookup, and AI commentary.
+- [ ] Verify desktop/mobile interactions and publish.
