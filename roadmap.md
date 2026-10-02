@@ -1,4 +1,4 @@
 - [x] Inspect uploaded portfolio app and replace insecure sign-in and database access.
 - [x] Bring across holdings, target scenarios, search and price lookup, and AI commentary.
 - [ ] Verify desktop/mobile interactions and publish.
-- [ ] Let users choose Groq or Gemini 2.5 Flash-Lite and paste a key for analysis without storing it.
+- [x] Let users choose Groq or Gemini 2.5 Flash-Lite and paste a key for analysis without storing it.
