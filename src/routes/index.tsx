@@ -1261,7 +1261,9 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [providers, setProviders] = useState<AiProviderStatus[] | null>(null);
-  const [provider, setProvider] = useState<AiProviderId | "">("");
+  const [provider, setProvider] = useState<AiProviderId>("gemini");
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
   // Learn which AI providers are configured (keys live on the server) the first time the dialog opens.
   useEffect(() => {
     if (!open || providers) return;
@@ -1270,9 +1272,8 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
       .then((list) => {
         if (!active) return;
         setProviders(list);
-        const usable = list.filter((p) => p.available);
         const saved = readStorage(AI_PROVIDER_KEY);
-        setProvider(usable.find((p) => p.id === saved)?.id ?? usable[0]?.id ?? "");
+        setProvider(list.find((p) => p.id === saved)?.id ?? "gemini");
       })
       .catch(() => {
         if (active) setProviders([]);
@@ -1281,13 +1282,13 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
       active = false;
     };
   }, [open, providers]);
-  const noneAvailable = providers !== null && !providers.some((p) => p.available);
+  const serverKeyAvailable = providers?.find((p) => p.id === provider)?.available ?? false;
   async function ask(value?: string) {
     setBusy(true);
     setError("");
     try {
       const response = await getPortfolioInsight({
-        data: { question: value, ...(provider && { provider }) },
+        data: { question: value, provider, ...(apiKey.trim() && { apiKey: apiKey.trim() }) },
       });
       setAnswer(response);
       setQuestion("");
@@ -1301,7 +1302,11 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v) onClose();
+        if (!v) {
+          setApiKey("");
+          setShowKey(false);
+          onClose();
+        }
       }}
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -1315,36 +1320,49 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
           </DialogDescription>
         </DialogHeader>
         <div className="pt-3">
-          {providers && providers.length > 0 && (
-            <label className="mb-4 flex items-center gap-2 text-sm">
+          <div className="mb-4 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
               <span className="text-muted-foreground">Model</span>
               <select
                 aria-label="AI model"
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 value={provider}
-                disabled={busy || noneAvailable}
+                disabled={busy}
                 onChange={(e) => {
                   const next = e.target.value as AiProviderId;
                   setProvider(next);
+                  setApiKey("");
+                  setAnswer("");
+                  setError("");
                   writeStorage(AI_PROVIDER_KEY, next);
                 }}
               >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.available}>
-                    {p.label}
-                    {p.available ? "" : " (not set up)"}
-                  </option>
-                ))}
+                <option value="gemini">Gemini 2.5 Flash Lite</option>
+                <option value="groq">Groq</option>
               </select>
             </label>
-          )}
-          {noneAvailable && (
-            <p role="alert" className="mb-4 text-sm text-muted-foreground">
-              AI insights aren&apos;t set up yet — the app owner needs to add an AI provider key.
-            </p>
-          )}
+            <label className="block space-y-1.5 text-sm">
+              <span className="text-muted-foreground">{provider === "groq" ? "Groq" : "Gemini"} API key {serverKeyAvailable ? "(optional)" : ""}</span>
+              <span className="flex gap-2">
+                <Input
+                  aria-label={`${provider === "groq" ? "Groq" : "Gemini"} API key`}
+                  type={showKey ? "text" : "password"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={serverKeyAvailable ? "Use configured key or paste yours" : "Paste your API key"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  disabled={busy}
+                />
+                <Button type="button" variant="outline" size="icon" aria-label={showKey ? "Hide API key" : "Show API key"} title={showKey ? "Hide API key" : "Show API key"} onClick={() => setShowKey((v) => !v)}>
+                  {showKey ? <EyeOff /> : <Eye />}
+                </Button>
+              </span>
+            </label>
+            <p className="text-xs text-muted-foreground">Your key is used for this request and cleared when you close this window. Your holdings are sent to the selected provider for analysis.</p>
+          </div>
           {!answer && !busy && (
-            <Button onClick={() => void ask()} disabled={!provider}>
+            <Button onClick={() => void ask()} disabled={!apiKey.trim() && !serverKeyAvailable}>
               Analyze my portfolio
             </Button>
           )}

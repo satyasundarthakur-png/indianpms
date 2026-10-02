@@ -27,15 +27,21 @@ describe("getProviderConfig", () => {
     expect(getProviderConfig("gemini")?.model).toBe("gemini-custom");
   });
 
-  it("needs both key and model for Groq (no guessed default)", () => {
+  it("uses the Groq default model with a supplied key", () => {
     vi.stubEnv("GROQ_API_KEY", "q-key");
     vi.stubEnv("GROQ_MODEL", "");
-    expect(getProviderConfig("groq")).toBeNull();
-    vi.stubEnv("GROQ_MODEL", "some-model");
     expect(getProviderConfig("groq")).toEqual({
       baseURL: "https://api.groq.com/openai/v1",
       apiKey: "q-key",
-      model: "some-model",
+      model: "llama-3.3-70b-versatile",
     });
+    expect(getProviderConfig("groq", " pasted-key ")?.apiKey).toBe("pasted-key");
+    vi.stubEnv("GROQ_MODEL", "some-model");
+    expect(getProviderConfig("groq")?.model).toBe("some-model");
+  });
+
+  it("accepts a pasted Gemini key without a server key", () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    expect(getProviderConfig("gemini", " pasted-key ")?.apiKey).toBe("pasted-key");
   });
 });

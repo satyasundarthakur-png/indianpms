@@ -12,3 +12,4 @@
 - Keep the uploaded portfolio's domain calculations in `src/lib/portfolio.ts` and compute AI context from authenticated database rows on the server, because client-provided financial figures can be altered.
 - Use Cloud authentication with per-user row policies rather than the uploaded custom account table, because its plaintext passwords and unrestricted policies expose accounts and holdings.
 - Proxy the stock search and quotes through a validated TanStack server route, because the uploaded development proxy does not exist on deployment.
+- Keep user-pasted AI provider keys only in page memory and pass them to the authenticated analysis server function for the current request; never store them in browser storage or the database.
