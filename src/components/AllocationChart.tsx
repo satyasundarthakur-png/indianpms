@@ -1,5 +1,6 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { money, type Stock } from "@/lib/portfolio";
+import { usePrefersReducedMotion } from "@/lib/useCountUp";
 
 const PALETTE = [
   "var(--chart-1)",
@@ -11,12 +12,15 @@ const PALETTE = [
 
 /** Colorful, animated allocation donut — shows how invested capital is spread across holdings. */
 export function AllocationChart({ stocks }: { stocks: Stock[] }) {
+  const reducedMotion = usePrefersReducedMotion();
   const data = [...stocks]
     .sort((a, b) => Number(b.invested_amount) - Number(a.invested_amount))
     .map((s) => ({ name: s.stock_name, value: Number(s.invested_amount) }));
 
-  const top = data.slice(0, 6);
-  const restTotal = data.slice(6).reduce((sum, d) => sum + d.value, 0);
+  // Show at most PALETTE.length slices (top N-1 + "Other") so no two slices share a color.
+  const maxNamed = PALETTE.length - 1;
+  const top = data.length > PALETTE.length ? data.slice(0, maxNamed) : data;
+  const restTotal = data.slice(top.length).reduce((sum, d) => sum + d.value, 0);
   const slices = restTotal > 0 ? [...top, { name: "Other", value: restTotal }] : top;
 
   if (!slices.length) return null;
@@ -40,7 +44,7 @@ export function AllocationChart({ stocks }: { stocks: Stock[] }) {
                 paddingAngle={2}
                 animationBegin={100}
                 animationDuration={700}
-                isAnimationActive
+                isAnimationActive={!reducedMotion}
               >
                 {slices.map((_, i) => (
                   <Cell key={i} fill={PALETTE[i % PALETTE.length]} stroke="var(--card)" />
@@ -60,7 +64,7 @@ export function AllocationChart({ stocks }: { stocks: Stock[] }) {
         </div>
         <ul className="grid w-full min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-2">
           {slices.map((d, i) => (
-            <li key={d.name} className="flex min-w-0 items-center gap-2 text-xs">
+            <li key={`${i}-${d.name}`} className="flex min-w-0 items-center gap-2 text-xs">
               <span
                 className="size-2.5 shrink-0 rounded-full"
                 style={{ background: PALETTE[i % PALETTE.length] }}

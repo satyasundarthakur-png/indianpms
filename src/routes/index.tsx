@@ -496,7 +496,11 @@ function Portfolio({
             label="XIRR"
             amount={xirr ?? 0}
             suffix="%"
-            sub={xirr === null ? "Need at least one target" : "Annualized, money-weighted"}
+            sub={
+              xirr === null || totals.withTargets === 0
+                ? "Need at least one target"
+                : "Annualized, money-weighted"
+            }
             positive={(xirr ?? 0) > 0}
             icon={<Gauge className="size-3.5" />}
             accent="var(--chart-5)"
