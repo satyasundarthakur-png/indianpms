@@ -1,26 +1,39 @@
-# smartpms
+# PrediFolio
 
-deploy this uploaded, edit if needed, usebr ai logic, no question for me
+A personal portfolio and sell-target tracker for Indian investors. Record your
+holdings, plan sell targets (profit targets and stop-losses), and see live
+market value, unrealised P&L, XIRR and per-holding CAGR. Optional AI commentary
+summarises your portfolio.
 
-This project was built with [Lovable](https://lovable.dev).
+Built with TanStack Start (React 19), Supabase (auth + Postgres with row-level
+security), Tailwind and shadcn/ui, and edited through Lovable.
 
-**Live app**: https://indianpms.lovable.app
+## Develop
 
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/50820c8e-6aaa-4f3a-ac74-b2b2e9910935).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
+```bash
+bun install      # or: npm install --legacy-peer-deps
+bun run dev
+bun run test     # vitest
+bunx tsc --noEmit
 ```
+
+## AI insights (optional)
+
+The "AI insights" button works with whichever providers you configure as
+**server-side secrets** (never commit them or expose them to the browser). The
+user picks from the configured providers in the dialog; unconfigured ones show
+as "not set up".
+
+| Provider              | Secrets                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| Gemini 2.5 Flash Lite | `GEMINI_API_KEY` (optional `GEMINI_MODEL` to override the model id) |
+| Groq                  | `GROQ_API_KEY` and `GROQ_MODEL` (the Groq model id to use)          |
+
+Both are called through their OpenAI-compatible endpoints. Only your holdings
+and totals are sent to the provider you choose.
+
+## Notes
+
+- Live prices come from a server-side proxy to Screener.in (`/api/screener`) and
+  may be delayed or unavailable.
+- Target-scenario figures are plans, not forecasts. Nothing here is investment advice.

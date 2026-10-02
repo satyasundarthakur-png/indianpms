@@ -23,9 +23,13 @@ import {
   summary,
   targetHits,
   targets,
+  validateTargets,
 } from "@/lib/portfolio";
 import { fetchQuote } from "@/lib/quotes";
-import { getPortfolioInsight } from "@/lib/insights.functions";
+import { toCsv } from "@/lib/csv";
+import { readStorage, writeStorage } from "@/lib/storage";
+import type { AiProviderId, AiProviderStatus } from "@/lib/ai-providers";
+import { getAiProviders, getPortfolioInsight } from "@/lib/insights.functions";
 import { useCountUp } from "@/lib/useCountUp";
 import { AllocationChart } from "@/components/AllocationChart";
 import { GoalProgress } from "@/components/GoalProgress";
@@ -68,6 +72,8 @@ import {
   Pencil,
 } from "lucide-react";
 
+const THEME_KEY = "predifolio-theme";
+const AI_PROVIDER_KEY = "predifolio-ai-provider";
 type Suggestion = { id: number; name: string };
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 const emptyForm = () => ({
@@ -105,25 +111,35 @@ function Index() {
   const [ready, setReady] = useState(false);
   const [dark, setDark] = useState(false);
   useEffect(() => {
-    const saved = window.localStorage.getItem("predifolio-theme") === "dark";
+    const saved = readStorage(THEME_KEY) === "dark";
     setDark(saved);
     document.documentElement.classList.toggle("dark", saved);
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user);
-      setReady(true);
-    });
+    let active = true;
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (active) setUser(data.user);
+      })
+      .catch(() => {
+        /* offline or auth service down: fall through to the sign-in screen instead of hanging */
+      })
+      .finally(() => {
+        if (active) setReady(true);
+      });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setReady(true);
     });
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
   function toggleTheme() {
-    setDark((prev) => {
-      document.documentElement.classList.toggle("dark", !prev);
-      window.localStorage.setItem("predifolio-theme", !prev ? "dark" : "light");
-      return !prev;
-    });
+    const next = !dark;
+    setDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    writeStorage(THEME_KEY, next ? "dark" : "light");
   }
   return (
     <>
@@ -153,40 +169,42 @@ function Auth({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void })
     e.preventDefault();
     setBusy(true);
     setNotice("");
-    const result = signup
-      ? await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { full_name: name.trim() } },
-        })
-      : await supabase.auth.signInWithPassword({ email, password });
-    if (result.error) setNotice(result.error.message);
-    else if (signup && !result.data.session)
-      setNotice("Check your inbox to confirm your email, then sign in.");
-    setBusy(false);
+    try {
+      const result = signup
+        ? await supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { full_name: name.trim() } },
+          })
+        : await supabase.auth.signInWithPassword({ email, password });
+      if (result.error) setNotice(result.error.message);
+      else if (signup && !result.data.session)
+        setNotice("Check your inbox to confirm your email, then sign in.");
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function google() {
     setBusy(true);
     setNotice("");
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (result.error) setNotice(result.error.message);
-    if (!result.redirected) setBusy(false);
+    try {
+      const result = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
+      if (result.error) setNotice(result.error.message);
+      if (!result.redirected) setBusy(false);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Google sign-in failed. Please try again.");
+      setBusy(false);
+    }
   }
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
         <Brand />
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          title={dark ? "Light mode" : "Dark mode"}
-          aria-label="Toggle theme"
-        >
-          {dark ? <Sun /> : <Moon />}
-        </Button>
+        <ThemeToggle dark={dark} toggleTheme={toggleTheme} />
       </header>
       <main className="mx-auto grid min-h-[calc(100vh-90px)] max-w-7xl items-center gap-14 px-6 pb-16 lg:grid-cols-[1.15fr_.85fr]">
         <section className="relative overflow-hidden py-8">
@@ -331,6 +349,20 @@ function Auth({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void })
     </div>
   );
 }
+function ThemeToggle({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggleTheme}
+      title={dark ? "Light mode" : "Dark mode"}
+      aria-label="Toggle theme"
+    >
+      {dark ? <Sun /> : <Moon />}
+    </Button>
+  );
+}
+
 function Brand() {
   return (
     <div className="flex items-center gap-2.5 text-xl font-bold">
@@ -379,8 +411,15 @@ function Portfolio({
     if (!list.length) return 0;
     inflight.current += 1;
     setQuotesBusy(true);
+    // Holdings of the same stock (several buys) share one lookup.
+    const lookups = new Map<string, Promise<Quote | null>>();
+    const lookup = (name: string) => {
+      const key = name.trim().toLowerCase();
+      if (!lookups.has(key)) lookups.set(key, fetchQuote(name));
+      return lookups.get(key)!;
+    };
     const pairs = await Promise.all(
-      list.map(async (stock) => [stock.id, await fetchQuote(stock.stock_name)] as const),
+      list.map(async (stock) => [stock.id, await lookup(stock.stock_name)] as const),
     );
     const fresh = pairs.filter((p): p is readonly [string, Quote] => p[1] !== null);
     setQuotes((prev) => ({ ...prev, ...Object.fromEntries(fresh) }));
@@ -407,7 +446,7 @@ function Portfolio({
     const storageKey = `predifolio-seen-hits-${user.id}`;
     let seen: string[] = [];
     try {
-      const raw: unknown = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]");
+      const raw: unknown = JSON.parse(readStorage(storageKey) ?? "[]");
       seen = Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : [];
     } catch {
       seen = [];
@@ -421,14 +460,7 @@ function Portfolio({
         : `${fresh.length} sell targets reached`;
     if (fresh.some((h) => h.kind === "stop")) toast.warning(message);
     else toast.success(message);
-    try {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify([...seen, ...fresh.map((h) => h.key)]),
-      );
-    } catch {
-      /* storage unavailable — banner still shows */
-    }
+    writeStorage(storageKey, JSON.stringify([...seen, ...fresh.map((h) => h.key)]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hitsKey, user.id]);
   const totals = summary(stocks);
@@ -479,14 +511,11 @@ function Portfolio({
         s.notes ?? "",
       ]),
     ];
-    const csv = rows
-      .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
-      .join("\r\n");
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.href = URL.createObjectURL(new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" }));
     a.download = "predifolio-holdings.csv";
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -497,15 +526,7 @@ function Portfolio({
             <span className="hidden max-w-48 truncate text-sm text-muted-foreground sm:block">
               {user.user_metadata?.["full_name"] || user.email}
             </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleTheme}
-              aria-label="Toggle theme"
-              title={dark ? "Light mode" : "Dark mode"}
-            >
-              {dark ? <Sun /> : <Moon />}
-            </Button>
+            <ThemeToggle dark={dark} toggleTheme={toggleTheme} />
             <Button
               variant="ghost"
               size="icon"
@@ -1031,13 +1052,13 @@ function HoldingEditor({
   }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (
-      !Number.isFinite(invested) ||
-      invested <= 0 ||
-      plans.some((p) => p.price <= 0 || p.stocks <= 0) ||
-      plans.reduce((n, p) => n + p.stocks, 0) > Number(form.buy_stocks)
-    ) {
-      toast.error("Check your shares, buy price, and sell targets.");
+    if (!Number.isFinite(invested) || invested <= 0) {
+      toast.error("Enter a buy price and number of shares above zero.");
+      return;
+    }
+    const targetError = validateTargets(plans, Number(form.buy_stocks));
+    if (targetError) {
+      toast.error(targetError);
       return;
     }
     setBusy(true);
@@ -1239,11 +1260,35 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [providers, setProviders] = useState<AiProviderStatus[] | null>(null);
+  const [provider, setProvider] = useState<AiProviderId | "">("");
+  // Learn which AI providers are configured (keys live on the server) the first time the dialog opens.
+  useEffect(() => {
+    if (!open || providers) return;
+    let active = true;
+    getAiProviders()
+      .then((list) => {
+        if (!active) return;
+        setProviders(list);
+        const usable = list.filter((p) => p.available);
+        const saved = readStorage(AI_PROVIDER_KEY);
+        setProvider(usable.find((p) => p.id === saved)?.id ?? usable[0]?.id ?? "");
+      })
+      .catch(() => {
+        if (active) setProviders([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, providers]);
+  const noneAvailable = providers !== null && !providers.some((p) => p.available);
   async function ask(value?: string) {
     setBusy(true);
     setError("");
     try {
-      const response = await getPortfolioInsight({ data: { question: value } });
+      const response = await getPortfolioInsight({
+        data: { question: value, ...(provider && { provider }) },
+      });
       setAnswer(response);
       setQuestion("");
     } catch (e) {
@@ -1270,7 +1315,39 @@ function Insights({ open, onClose }: { open: boolean; onClose: () => void }) {
           </DialogDescription>
         </DialogHeader>
         <div className="pt-3">
-          {!answer && !busy && <Button onClick={() => void ask()}>Analyze my portfolio</Button>}
+          {providers && providers.length > 0 && (
+            <label className="mb-4 flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Model</span>
+              <select
+                aria-label="AI model"
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={provider}
+                disabled={busy || noneAvailable}
+                onChange={(e) => {
+                  const next = e.target.value as AiProviderId;
+                  setProvider(next);
+                  writeStorage(AI_PROVIDER_KEY, next);
+                }}
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!p.available}>
+                    {p.label}
+                    {p.available ? "" : " (not set up)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {noneAvailable && (
+            <p role="alert" className="mb-4 text-sm text-muted-foreground">
+              AI insights aren&apos;t set up yet — the app owner needs to add an AI provider key.
+            </p>
+          )}
+          {!answer && !busy && (
+            <Button onClick={() => void ask()} disabled={!provider}>
+              Analyze my portfolio
+            </Button>
+          )}
           {busy && (
             <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
               <Activity className="animate-pulse" />

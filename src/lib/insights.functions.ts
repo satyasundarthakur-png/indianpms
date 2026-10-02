@@ -1,11 +1,36 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import {
+  AI_PROVIDER_IDS,
+  AI_PROVIDER_LABELS,
+  type AiProviderId,
+  type AiProviderStatus,
+} from "./ai-providers";
 import { projected, summary, targets } from "./portfolio";
+
+/** Which AI providers are configured on the server (never exposes keys or model names). */
+export const getAiProviders = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async (): Promise<AiProviderStatus[]> => {
+    const { getProviderConfig } = await import("./ai-providers.server");
+    return AI_PROVIDER_IDS.map((id) => ({
+      id,
+      label: AI_PROVIDER_LABELS[id],
+      available: getProviderConfig(id) !== null,
+    }));
+  });
 
 export const getPortfolioInsight = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input) => z.object({ question: z.string().max(500).optional() }).parse(input))
+  .inputValidator((input) =>
+    z
+      .object({
+        question: z.string().max(500).optional(),
+        provider: z.enum(AI_PROVIDER_IDS).optional(),
+      })
+      .parse(input),
+  )
   .handler(async ({ context, data }) => {
     const { data: stocks, error } = await context.supabase
       .from("stocks")
@@ -25,41 +50,37 @@ export const getPortfolioInsight = createServerFn({ method: "POST" })
       targets: targets(stock).map((t) => ({ shares: t.stocks, price: t.price })),
       projectedValue: projected(stock),
     }));
+    const { getProviderConfig } = await import("./ai-providers.server");
+    const requested: AiProviderId | undefined = data.provider;
+    const chosen = requested ?? AI_PROVIDER_IDS.find((id) => getProviderConfig(id) !== null);
+    const config = chosen ? getProviderConfig(chosen) : null;
+    if (!config) throw new Error("AI insights aren't configured for this provider yet.");
     const { createOpenAI } = await import("@ai-sdk/openai");
-    const { streamText } = await import("ai");
-    const { createLovableAiGatewayRunIdFetch } = await import("./ai-run-id.server");
-    const apiKey = process.env["LOVABLE_API_KEY"];
-    if (!apiKey) throw new Error("AI is not available right now.");
-    const runIdFetch = createLovableAiGatewayRunIdFetch();
-    const provider = createOpenAI({
-      baseURL: "https://ai.gateway.lovable.dev/v1",
-      apiKey,
-      headers: { "Lovable-API-Key": apiKey, "X-Lovable-AIG-SDK": "vercel-ai-sdk" },
-      fetch: runIdFetch.fetch,
-    });
-    const result = streamText({
-      model: provider.responses("openai/gpt-6-astra"),
-      maxRetries: 0,
-      providerOptions: {
-        openai: {
-          store: false,
-          forceReasoning: true,
-          reasoningEffort: "low",
-          reasoningSummary: "auto",
-          include: ["reasoning.encrypted_content"],
-        },
-      },
-      system:
-        "You are a careful portfolio commentary assistant for an Indian retail investor. All data is already calculated. Never invent live prices, guarantees or new figures. Explicitly distinguish target-based projections from actual returns and note when targets are missing. Highlight allocation and concentration risks when relevant. Respond in plain English, briefly (under 180 words), use ₹. End with: This is educational commentary, not investment advice.",
-      prompt: JSON.stringify({
-        holdings,
-        totals,
-        question:
-          data.question ||
-          "Summarize this portfolio, its target scenarios, and main concentration risks.",
-      }),
-    });
-    const text = await result.text;
+    const { generateText } = await import("ai");
+    // Gemini and Groq both expose OpenAI-compatible chat-completions endpoints.
+    const provider = createOpenAI({ baseURL: config.baseURL, apiKey: config.apiKey });
+    let text: string;
+    try {
+      ({ text } = await generateText({
+        model: provider.chat(config.model),
+        maxRetries: 1,
+        maxOutputTokens: 700,
+        abortSignal: AbortSignal.timeout(30_000),
+        system:
+          "You are a careful portfolio commentary assistant for an Indian retail investor. All data is already calculated. Never invent live prices, guarantees or new figures. Explicitly distinguish target-based projections from actual returns and note when targets are missing. Highlight allocation and concentration risks when relevant. Respond in plain English, briefly (under 180 words), use ₹. End with: This is educational commentary, not investment advice.",
+        prompt: JSON.stringify({
+          holdings,
+          totals,
+          question:
+            data.question ||
+            "Summarize this portfolio, its target scenarios, and main concentration risks.",
+        }),
+      }));
+    } catch (error) {
+      // Log the real cause server-side; show only a generic message to the user.
+      console.error("AI insight request failed", error);
+      throw new Error("The AI provider didn't respond. Try again, or choose another model.");
+    }
     if (!text.trim()) throw new Error("No insight was returned. Please try again.");
     return text.trim();
   });
