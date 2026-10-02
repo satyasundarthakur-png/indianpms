@@ -375,3 +375,8 @@
     color: var(--color-foreground);
   }
 }
+
+.alert-banner {
+  border-left: 3px solid var(--primary);
+  animation: fade-in-up 0.4s ease-out both;
+}

@@ -1,14 +1,39 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable/index";
 import type { User } from "@supabase/supabase-js";
-import type { Stock, Target } from "@/lib/portfolio";
-import { money, number, portfolioXirr, projected, summary, targets } from "@/lib/portfolio";
+import type { Quote, Stock, Target } from "@/lib/portfolio";
+import {
+  holdingCagr,
+  liveSummary,
+  money,
+  number,
+  portfolioXirr,
+  portfolioXirrCurrent,
+  projected,
+  summary,
+  targetHits,
+  targets,
+} from "@/lib/portfolio";
+import { fetchQuote } from "@/lib/quotes";
 import { getPortfolioInsight } from "@/lib/insights.functions";
 import { useCountUp } from "@/lib/useCountUp";
 import { AllocationChart } from "@/components/AllocationChart";
 import { GoalProgress } from "@/components/GoalProgress";
+import { InfoTip, TERMS } from "@/components/InfoTip";
+import { InlineTargets } from "@/components/InlineTargets";
+import { Section } from "@/components/Section";
+import { TargetAlerts } from "@/components/TargetAlerts";
+import { TargetsChart } from "@/components/TargetsChart";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -332,8 +357,11 @@ function Portfolio({
   const [insights, setInsights] = useState(false);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"recent" | "name" | "value">("recent");
-  const [quotes, setQuotes] = useState<Record<string, { price: number; date: string }>>({});
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [quotesBusy, setQuotesBusy] = useState(false);
+  const [dismissedHits, setDismissedHits] = useState("");
+  const attempted = useRef(new Set<string>());
+  const inflight = useRef(0);
   async function load() {
     const { data, error } = await supabase
       .from("stocks")
@@ -346,37 +374,77 @@ function Portfolio({
   useEffect(() => {
     void load();
   }, []);
-  async function refreshPrices() {
+  /** Fetches quotes for the given holdings and merges them into state; returns how many succeeded. */
+  async function fetchQuotesFor(list: Stock[]) {
+    if (!list.length) return 0;
+    inflight.current += 1;
     setQuotesBusy(true);
     const pairs = await Promise.all(
-      stocks.map(async (stock) => {
-        try {
-          const searchResponse = await fetch(
-            `/api/screener?q=${encodeURIComponent(stock.stock_name)}`,
-          );
-          const matches: Suggestion[] = await searchResponse.json();
-          if (!Array.isArray(matches) || !matches.length) return null;
-          const chartResponse = await fetch(`/api/screener?id=${matches[0]?.id}`);
-          const chart = await chartResponse.json();
-          const prices = chart?.datasets?.find(
-            (d: { metric: string }) => d.metric === "Price",
-          )?.values;
-          const latest = prices?.[prices.length - 1];
-          return latest
-            ? ([stock.id, { price: Number(latest[1]), date: latest[0] }] as const)
-            : null;
-        } catch {
-          return null;
-        }
-      }),
+      list.map(async (stock) => [stock.id, await fetchQuote(stock.stock_name)] as const),
     );
-    setQuotes(Object.fromEntries(pairs.filter((p): p is NonNullable<typeof p> => p !== null)));
-    if (pairs.every((p) => p === null) && stocks.length)
-      toast.error("Market prices are temporarily unavailable.");
-    setQuotesBusy(false);
+    const fresh = pairs.filter((p): p is readonly [string, Quote] => p[1] !== null);
+    setQuotes((prev) => ({ ...prev, ...Object.fromEntries(fresh) }));
+    inflight.current -= 1;
+    if (inflight.current === 0) setQuotesBusy(false);
+    return fresh.length;
   }
+  async function refreshPrices() {
+    const ok = await fetchQuotesFor(stocks);
+    if (stocks.length && !ok) toast.error("Market prices are temporarily unavailable.");
+  }
+  // Price every holding we haven't tried yet: all of them on first load, and any newly added later.
+  useEffect(() => {
+    const pending = stocks.filter((s) => !attempted.current.has(s.id));
+    if (!pending.length) return;
+    pending.forEach((s) => attempted.current.add(s.id));
+    void fetchQuotesFor(pending);
+  }, [stocks]);
+  const hits = useMemo(() => targetHits(stocks, quotes), [stocks, quotes]);
+  const hitsKey = hits.map((h) => h.key).join("|");
+  // Toast once per newly reached target (remembered per user; editing a target's price re-arms it).
+  useEffect(() => {
+    if (!hits.length) return;
+    const storageKey = `predifolio-seen-hits-${user.id}`;
+    let seen: string[] = [];
+    try {
+      const raw: unknown = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]");
+      seen = Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : [];
+    } catch {
+      seen = [];
+    }
+    const fresh = hits.filter((h) => !seen.includes(h.key));
+    if (!fresh.length) return;
+    const first = fresh[0]!;
+    const message =
+      fresh.length === 1
+        ? `${first.stockName}: ${first.kind === "profit" ? "sell target" : "stop-loss"} ${money(first.target.price)} reached`
+        : `${fresh.length} sell targets reached`;
+    if (fresh.some((h) => h.kind === "stop")) toast.warning(message);
+    else toast.success(message);
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify([...seen, ...fresh.map((h) => h.key)]),
+      );
+    } catch {
+      /* storage unavailable — banner still shows */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hitsKey, user.id]);
   const totals = summary(stocks);
   const xirr = portfolioXirr(stocks);
+  const live = liveSummary(stocks, quotes);
+  const xirrLive = portfolioXirrCurrent(stocks, quotes);
+  const pricedNote =
+    live.total === 0
+      ? ""
+      : live.priced === live.total
+        ? "Live market prices"
+        : live.priced === 0
+          ? quotesBusy
+            ? "Fetching prices…"
+            : "Prices unavailable — tap Prices"
+          : `${live.priced} of ${live.total} holdings priced`;
   const filtered = stocks
     .filter((s) => s.stock_name.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) =>
@@ -464,7 +532,7 @@ function Portfolio({
             Add holding
           </Button>
         </div>
-        <div className="metric-strip grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
+        <div className="metric-strip grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           <Metric
             label="Amount invested"
             amount={totals.invested}
@@ -472,148 +540,222 @@ function Portfolio({
             accent="var(--chart-1)"
           />
           <Metric
-            label="Target scenario"
-            amount={totals.projectedValue}
-            sub={`${totals.withTargets} with sell targets`}
+            label="Current value"
+            amount={live.value}
+            sub={pricedNote || "Add a holding to begin"}
             accent="var(--chart-2)"
           />
           <Metric
-            label="Potential difference"
-            amount={totals.potential}
-            sub="Against amount invested"
-            positive={totals.potential > 0}
+            label="Unrealised P&L"
+            amount={live.pnl}
+            sub={
+              live.pnlPct === null
+                ? "Needs a live price"
+                : `${live.pnlPct > 0 ? "+" : ""}${number(live.pnlPct)}% on priced holdings`
+            }
+            positive={(live.pnl ?? 0) > 0}
+            negative={(live.pnl ?? 0) < 0}
+            info={{ label: "Unrealised P&L", text: TERMS.pnl }}
             accent="var(--chart-3)"
           />
           <Metric
-            label="Potential return"
-            amount={totals.percentage}
-            suffix="%"
-            sub="Based on sell targets"
-            positive={totals.percentage > 0}
-            accent="var(--chart-4)"
-          />
-          <Metric
             label="XIRR"
-            amount={xirr ?? 0}
+            amount={xirrLive}
             suffix="%"
             sub={
-              xirr === null || totals.withTargets === 0
-                ? "Need at least one target"
-                : "Annualized, money-weighted"
+              xirrLive === null ? "Needs prices for every holding" : "Annualized, money-weighted"
             }
-            positive={(xirr ?? 0) > 0}
+            positive={(xirrLive ?? 0) > 0}
+            negative={(xirrLive ?? 0) < 0}
+            info={{ label: "XIRR", text: TERMS.xirr }}
             icon={<Gauge className="size-3.5" />}
             accent="var(--chart-5)"
           />
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Target scenarios are estimates, not live portfolio valuations or guaranteed returns. XIRR
-          is a money-weighted estimate based on buy dates and target-scenario value.
-        </p>
-        {stocks.length > 0 && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
-            <GoalProgress userId={user.id} projectedValue={totals.projectedValue} />
-            <AllocationChart stocks={stocks} />
-          </div>
+        {hits.length > 0 && dismissedHits !== hitsKey && (
+          <TargetAlerts hits={hits} onDismiss={() => setDismissedHits(hitsKey)} />
         )}
-        <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold">
-              Holdings <span className="text-muted-foreground">({stocks.length})</span>
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">Your positions and planned exits</p>
+        <Section
+          className="mt-8"
+          title="If your targets are hit"
+          description="A plan-based scenario, separate from live market value"
+        >
+          <div className="metric-strip mt-4 grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+            <Metric
+              label="Target scenario"
+              amount={totals.projectedValue}
+              sub={`${totals.withTargets} with sell targets`}
+              info={{ label: "Target scenario", text: TERMS.scenario }}
+              accent="var(--chart-1)"
+            />
+            <Metric
+              label="Potential difference"
+              amount={totals.potential}
+              sub="Against amount invested"
+              positive={totals.potential > 0}
+              negative={totals.potential < 0}
+              accent="var(--chart-3)"
+            />
+            <Metric
+              label="Potential return"
+              amount={totals.percentage}
+              suffix="%"
+              sub="Based on sell targets"
+              positive={totals.percentage > 0}
+              negative={totals.percentage < 0}
+              accent="var(--chart-4)"
+            />
+            <Metric
+              label="Scenario XIRR"
+              amount={xirr}
+              suffix="%"
+              sub={
+                xirr === null || totals.withTargets === 0
+                  ? "Need at least one target"
+                  : "If targets sold today"
+              }
+              positive={(xirr ?? 0) > 0}
+              negative={(xirr ?? 0) < 0}
+              info={{ label: "XIRR", text: TERMS.xirr }}
+              icon={<Gauge className="size-3.5" />}
+              accent="var(--chart-5)"
+            />
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={refreshPrices}
-              disabled={quotesBusy || !stocks.length}
-              title="Refresh market prices"
-            >
-              <RefreshCw className={quotesBusy ? "animate-spin" : ""} />
-              Prices
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportCsv}
-              disabled={!stocks.length}
-              title="Download CSV"
-            >
-              <Download />
-              Export
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setInsights(true)}
-              disabled={!stocks.length}
-            >
-              <BrainCircuit />
-              AI insights
-            </Button>
-          </div>
-        </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Target scenarios are estimates, not live valuations or guaranteed returns. Market prices
+            may be delayed.
+          </p>
+        </Section>
         {stocks.length > 0 && (
-          <div className="mt-6 flex flex-wrap gap-3">
-            <div className="relative min-w-48 flex-1 sm:max-w-sm">
-              <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="Search holdings"
-                aria-label="Search holdings"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+          <Section
+            className="mt-8"
+            title="Overview"
+            description="Goal, allocation and target progress"
+          >
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+              <GoalProgress userId={user.id} projectedValue={totals.projectedValue} />
+              <AllocationChart stocks={stocks} />
             </div>
-            <div className="relative">
-              <select
-                aria-label="Sort holdings"
-                className="h-9 appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm"
-                value={sort}
-                onChange={(e) => setSort(e.target.value as typeof sort)}
-              >
-                <option value="recent">Most recent</option>
-                <option value="name">Name</option>
-                <option value="value">Amount invested</option>
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-2.5 size-4" />
+            <div className="mt-4">
+              <TargetsChart stocks={stocks} quotes={quotes} />
             </div>
-          </div>
+          </Section>
         )}
-        {loading ? (
-          <p className="py-20 text-center text-muted-foreground">Loading holdings…</p>
-        ) : !stocks.length ? (
-          <div className="mt-8 border border-dashed border-border px-6 py-20 text-center">
-            <div className="mx-auto mb-5 flex size-14 items-center justify-center bg-secondary text-primary">
-              <TrendingUp />
-            </div>
-            <h3 className="text-xl font-semibold">No holdings yet</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Add your first stock to start tracking your portfolio.
+        <Section
+          className="mt-10"
+          title="Holdings"
+          count={stocks.length}
+          description="Your positions and planned exits"
+        >
+          <div className="sticky top-0 z-30 -mx-5 mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/90 px-5 py-2 backdrop-blur sm:-mx-8 sm:px-8">
+            <p className="text-xs text-muted-foreground">
+              {quotesBusy
+                ? "Fetching prices…"
+                : stocks.length
+                  ? `${Object.keys(quotes).filter((id) => stocks.some((s) => s.id === id)).length} of ${stocks.length} priced`
+                  : ""}
             </p>
-            <Button className="mt-6" onClick={() => setEditor("new")}>
-              <Plus />
-              Add holding
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refreshPrices}
+                disabled={quotesBusy || !stocks.length}
+                title="Refresh market prices"
+                aria-label="Refresh market prices"
+              >
+                <RefreshCw className={quotesBusy ? "animate-spin" : ""} />
+                <span className="hidden sm:inline">Prices</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportCsv}
+                disabled={!stocks.length}
+                title="Download CSV"
+                aria-label="Download CSV"
+              >
+                <Download />
+                <span className="hidden sm:inline">Export</span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setInsights(true)}
+                disabled={!stocks.length}
+                aria-label="AI insights"
+              >
+                <BrainCircuit />
+                <span className="hidden sm:inline">AI insights</span>
+              </Button>
+              <Button size="sm" onClick={() => setEditor("new")} aria-label="Add holding">
+                <Plus />
+                <span className="hidden sm:inline">Add holding</span>
+              </Button>
+            </div>
           </div>
-        ) : !filtered.length ? (
-          <p className="py-20 text-center text-muted-foreground">No holdings match your search.</p>
-        ) : (
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((stock, i) => (
-              <Holding
-                key={stock.id}
-                stock={stock}
-                quote={quotes[stock.id]}
-                index={i}
-                onEdit={() => setEditor(stock)}
-                onChange={load}
-              />
-            ))}
-          </div>
-        )}
+          {stocks.length > 0 && (
+            <div className="mt-6 flex flex-wrap gap-3">
+              <div className="relative min-w-48 flex-1 sm:max-w-sm">
+                <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  placeholder="Search holdings"
+                  aria-label="Search holdings"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <div className="relative">
+                <select
+                  aria-label="Sort holdings"
+                  className="h-9 appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as typeof sort)}
+                >
+                  <option value="recent">Most recent</option>
+                  <option value="name">Name</option>
+                  <option value="value">Amount invested</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-2.5 size-4" />
+              </div>
+            </div>
+          )}
+          {loading ? (
+            <p className="py-20 text-center text-muted-foreground">Loading holdings…</p>
+          ) : !stocks.length ? (
+            <div className="mt-8 border border-dashed border-border px-6 py-20 text-center">
+              <div className="mx-auto mb-5 flex size-14 items-center justify-center bg-secondary text-primary">
+                <TrendingUp />
+              </div>
+              <h3 className="text-xl font-semibold">No holdings yet</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Add your first stock to start tracking your portfolio.
+              </p>
+              <Button className="mt-6" onClick={() => setEditor("new")}>
+                <Plus />
+                Add holding
+              </Button>
+            </div>
+          ) : !filtered.length ? (
+            <p className="py-20 text-center text-muted-foreground">
+              No holdings match your search.
+            </p>
+          ) : (
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((stock, i) => (
+                <Holding
+                  key={stock.id}
+                  stock={stock}
+                  quote={quotes[stock.id]}
+                  index={i}
+                  onEdit={() => setEditor(stock)}
+                  onChange={load}
+                />
+              ))}
+            </div>
+          )}
+        </Section>
       </main>
       <footer className="border-t border-border py-5 text-center text-xs text-muted-foreground">
         PrediFolio · Market prices may be delayed. For educational use only.
@@ -636,20 +778,24 @@ function Metric({
   suffix = "",
   sub,
   positive,
+  negative,
   accent,
   icon,
+  info,
 }: {
   label: string;
-  /** Raw numeric value to animate; money amounts are formatted, percentages use `suffix="%"`. */
-  amount: number;
+  /** Raw numeric value to animate (null shows "—"); money amounts are formatted, percentages use `suffix="%"`. */
+  amount: number | null;
   suffix?: string;
   sub: string;
   positive?: boolean;
+  negative?: boolean;
   accent?: string;
   icon?: ReactNode;
+  info?: { label: string; text: string };
 }) {
-  const animated = useCountUp(amount);
-  const display = suffix === "%" ? `${number(animated)}%` : money(animated);
+  const animated = useCountUp(amount ?? 0);
+  const display = amount === null ? "—" : suffix === "%" ? `${number(animated)}%` : money(animated);
   return (
     <div
       className="metric-tile min-w-0 bg-card p-6"
@@ -658,9 +804,18 @@ function Metric({
       <p className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
         {icon}
         {label}
+        {info && <InfoTip label={info.label} text={info.text} />}
       </p>
       <p
-        className={`mt-3 break-words text-2xl font-semibold tabular-nums sm:text-3xl ${positive ? "text-profit" : ""}`}
+        className={`mt-3 break-words text-2xl font-semibold tabular-nums sm:text-3xl ${
+          amount === null
+            ? "text-muted-foreground"
+            : positive
+              ? "text-profit"
+              : negative
+                ? "text-destructive"
+                : ""
+        }`}
       >
         {display}
       </p>
@@ -676,7 +831,7 @@ function Holding({
   onChange,
 }: {
   stock: Stock;
-  quote: { price: number; date: string } | undefined;
+  quote: Quote | undefined;
   index: number;
   onEdit: () => void;
   onChange: () => void;
@@ -685,6 +840,12 @@ function Holding({
   const plans = targets(stock);
   const scenario = projected(stock);
   const difference = scenario === null ? null : scenario - Number(stock.invested_amount);
+  const marketValue = quote ? quote.price * Number(stock.buy_stocks) : null;
+  const pnl = marketValue === null ? null : marketValue - Number(stock.invested_amount);
+  const pnlPct = pnl === null ? null : (pnl / Number(stock.invested_amount)) * 100;
+  const cagr = quote ? holdingCagr(stock, quote.price) : null;
+  // Accent follows real P&L when a live price is known, otherwise the target scenario.
+  const accentValue = pnl ?? difference;
   const targetedShares = plans.reduce((sum, p) => sum + Math.max(0, p.stocks), 0);
   const targetProgress =
     Number(stock.buy_stocks) > 0
@@ -704,7 +865,7 @@ function Holding({
   return (
     <article
       className={`holding-card fade-in-up flex min-w-0 flex-col border border-border bg-card p-5 pl-6 ${
-        difference === null ? "" : difference >= 0 ? "holding-card--profit" : "holding-card--loss"
+        accentValue === null ? "" : accentValue >= 0 ? "holding-card--profit" : "holding-card--loss"
       }`}
       style={{ animationDelay: `${Math.min(index, 10) * 40}ms` }}
     >
@@ -776,28 +937,45 @@ function Holding({
           </span>
         )}
       </div>
-      {plans.length > 0 && (
-        <>
-          <p className="mt-3 text-xs text-muted-foreground">
-            {plans.length} sell target{plans.length === 1 ? "" : "s"} ·{" "}
-            {plans.map((p) => `${number(p.stocks)} at ${money(p.price)}`).join(" · ")}
-          </p>
-          <div
-            className="target-progress-track mt-2"
-            role="progressbar"
-            aria-label="Shares allocated to sell targets"
-            aria-valuenow={Math.round(targetProgress)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-          >
-            <div className="target-progress-fill" style={{ width: `${targetProgress}%` }} />
+      {quote && marketValue !== null && pnl !== null && pnlPct !== null && (
+        <div className="mt-4 space-y-1.5 bg-secondary px-3 py-2 text-xs">
+          <div className="flex justify-between gap-2">
+            <span>Market price · {quote.date}</span>
+            <strong>{money(quote.price)}</strong>
           </div>
-        </>
+          <div className="flex justify-between gap-2">
+            <span>Value · P&amp;L</span>
+            <strong className={pnl >= 0 ? "text-profit" : "text-destructive"}>
+              {money(marketValue)} · {pnl >= 0 ? "+" : "−"}
+              {money(Math.abs(pnl))} ({pnlPct > 0 ? "+" : ""}
+              {number(pnlPct)}%)
+            </strong>
+          </div>
+          {cagr !== null && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1">
+                CAGR <InfoTip label="CAGR" text={TERMS.cagr} />
+              </span>
+              <strong className={cagr >= 0 ? "text-profit" : "text-destructive"}>
+                {cagr > 0 ? "+" : ""}
+                {number(cagr)}%
+              </strong>
+            </div>
+          )}
+        </div>
       )}
-      {quote && (
-        <div className="mt-4 flex justify-between gap-2 bg-secondary px-3 py-2 text-xs">
-          <span>Market price · {quote.date}</span>
-          <strong>{money(quote.price)}</strong>
+      <InlineTargets stock={stock} quote={quote} onChange={onChange} />
+      {plans.length > 0 && (
+        <div
+          className="target-progress-track mt-3"
+          role="progressbar"
+          aria-label="Shares allocated to sell targets"
+          aria-valuenow={Math.round(targetProgress)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          title={`${Math.round(targetProgress)}% of shares allocated to sell targets`}
+        >
+          <div className="target-progress-fill" style={{ width: `${targetProgress}%` }} />
         </div>
       )}
       {stock.notes && (
