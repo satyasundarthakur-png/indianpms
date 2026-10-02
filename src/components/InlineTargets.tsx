@@ -11,6 +11,7 @@ import {
   number,
   targetKind,
   targets,
+  validateTargets,
   type Quote,
   type Stock,
   type Target,
@@ -44,10 +45,8 @@ export function InlineTargets({
     stocks: Number(d.stocks),
   }));
   const allocated = parsed.reduce((n, p) => n + (Number.isFinite(p.stocks) ? p.stocks : 0), 0);
-  const invalid = parsed.some(
-    (p) => !Number.isFinite(p.price) || !Number.isFinite(p.stocks) || p.price <= 0 || p.stocks <= 0,
-  );
-  const overAllocated = allocated > held;
+  const validationError = validateTargets(parsed, held);
+  const overAllocated = allocated > held + 1e-9;
 
   function startEditing() {
     setDrafts(
@@ -62,12 +61,8 @@ export function InlineTargets({
   }
 
   async function save() {
-    if (invalid || overAllocated) {
-      toast.error(
-        overAllocated
-          ? `You only hold ${number(held)} shares — targets add up to ${number(allocated)}.`
-          : "Each target needs a price and a share count above zero.",
-      );
+    if (validationError) {
+      toast.error(validationError);
       return;
     }
     setBusy(true);

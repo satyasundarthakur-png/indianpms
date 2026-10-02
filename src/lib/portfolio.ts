@@ -209,6 +209,30 @@ export function targetProgressToNext(stock: Stock, price: number) {
   };
 }
 
+/**
+ * Shared rule for sell targets (used by the full editor and inline editing):
+ * every target needs a positive price and share count, and together they can't
+ * exceed the shares held. Returns an error message, or null if valid. A tiny
+ * tolerance avoids rejecting fractional shares over floating-point noise
+ * (0.1 + 0.2 > 0.3 in JS).
+ */
+export function validateTargets(
+  plans: { price: number; stocks: number }[],
+  held: number,
+): string | null {
+  if (
+    plans.some(
+      (p) =>
+        !Number.isFinite(p.price) || !Number.isFinite(p.stocks) || p.price <= 0 || p.stocks <= 0,
+    )
+  )
+    return "Each target needs a price and a share count above zero.";
+  const allocated = plans.reduce((n, p) => n + p.stocks, 0);
+  if (allocated > held + 1e-9)
+    return `You only hold ${number(held)} shares — targets add up to ${number(allocated)}.`;
+  return null;
+}
+
 /** Progress (0-100, clamped) of the target scenario vs. a user-set goal amount. */
 export function goalProgress(projectedValue: number, goalAmount: number): number {
   if (!goalAmount || goalAmount <= 0) return 0;

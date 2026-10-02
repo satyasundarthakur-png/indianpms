@@ -78,14 +78,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "PrediFolio — Portfolio & Sell Target Tracker" },
+      {
+        name: "description",
+        content: "Track your investments, plan sell targets and see live profit and loss.",
+      },
+      { property: "og:title", content: "PrediFolio — Portfolio & Sell Target Tracker" },
+      {
+        property: "og:description",
+        content: "Track your investments, plan sell targets and see live profit and loss.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {

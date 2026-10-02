@@ -1,3 +1,4 @@
+import { readStorage, removeStorage, writeStorage } from "@/lib/storage";
 import { useEffect, useState, type FormEvent } from "react";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,7 @@ export function GoalProgress({
   const [input, setInput] = useState("");
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
+    const saved = readStorage(storageKey);
     const parsed = saved ? Number(saved) : NaN;
     setGoal(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
   }, [storageKey]);
@@ -44,13 +45,13 @@ export function GoalProgress({
     e.preventDefault();
     const amount = Number(input);
     if (!Number.isFinite(amount) || amount <= 0) return;
-    window.localStorage.setItem(storageKey, String(amount));
+    writeStorage(storageKey, String(amount));
     setGoal(amount);
     setEditing(false);
   }
 
   function clearGoal() {
-    window.localStorage.removeItem(storageKey);
+    removeStorage(storageKey);
     setGoal(null);
     setEditing(false);
   }

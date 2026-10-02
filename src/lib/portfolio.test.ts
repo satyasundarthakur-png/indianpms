@@ -10,6 +10,7 @@ import {
   targetHits,
   targetKind,
   targetProgressToNext,
+  validateTargets,
   type Quote,
   type Stock,
 } from "./portfolio";
@@ -167,5 +168,53 @@ describe("sell target alerts", () => {
     expect(targetProgressToNext(s, 130)!.pct).toBeCloseTo((130 / 150) * 100);
     expect(targetProgressToNext(s, 200)).toEqual({ pct: 100, target: 150, allHit: true });
     expect(targetProgressToNext(stock(), 100)).toBeNull();
+  });
+});
+
+describe("validateTargets", () => {
+  it("accepts valid targets within the shares held", () => {
+    expect(validateTargets([{ price: 120, stocks: 4 }], 10)).toBeNull();
+    expect(validateTargets([], 10)).toBeNull();
+  });
+
+  it("rejects non-positive or non-numeric values", () => {
+    expect(validateTargets([{ price: 0, stocks: 1 }], 10)).toMatch(/above zero/);
+    expect(validateTargets([{ price: 5, stocks: -1 }], 10)).toMatch(/above zero/);
+    expect(validateTargets([{ price: NaN, stocks: 1 }], 10)).toMatch(/above zero/);
+  });
+
+  it("rejects targets that exceed the shares held", () => {
+    expect(validateTargets([{ price: 5, stocks: 11 }], 10)).toMatch(/only hold/);
+    expect(
+      validateTargets(
+        [
+          { price: 5, stocks: 6 },
+          { price: 6, stocks: 5 },
+        ],
+        10,
+      ),
+    ).toMatch(/only hold/); // 11 > 10
+    expect(
+      validateTargets(
+        [
+          { price: 5, stocks: 5 },
+          { price: 6, stocks: 5 },
+        ],
+        10,
+      ),
+    ).toBeNull(); // exactly 10 is fine
+  });
+
+  it("does not reject fractional shares over floating-point noise", () => {
+    // 0.1 + 0.2 === 0.30000000000000004 in JS, which is > 0.3
+    expect(
+      validateTargets(
+        [
+          { price: 5, stocks: 0.1 },
+          { price: 6, stocks: 0.2 },
+        ],
+        0.3,
+      ),
+    ).toBeNull();
   });
 });
