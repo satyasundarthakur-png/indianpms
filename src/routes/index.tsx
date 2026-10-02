@@ -1,11 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable/index";
 import type { User } from "@supabase/supabase-js";
 import type { Stock, Target } from "@/lib/portfolio";
-import { money, number, projected, summary, targets } from "@/lib/portfolio";
+import { money, number, portfolioXirr, projected, summary, targets } from "@/lib/portfolio";
 import { getPortfolioInsight } from "@/lib/insights.functions";
+import { useCountUp } from "@/lib/useCountUp";
+import { AllocationChart } from "@/components/AllocationChart";
+import { GoalProgress } from "@/components/GoalProgress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,6 +33,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Gauge,
   Send,
   Sun,
   Target as TargetIcon,
@@ -372,6 +376,7 @@ function Portfolio({
     setQuotesBusy(false);
   }
   const totals = summary(stocks);
+  const xirr = portfolioXirr(stocks);
   const filtered = stocks
     .filter((s) => s.stock_name.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) =>
@@ -459,33 +464,54 @@ function Portfolio({
             Add holding
           </Button>
         </div>
-        <div className="grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+        <div className="metric-strip grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
           <Metric
             label="Amount invested"
-            value={money(totals.invested)}
+            amount={totals.invested}
             sub={`${stocks.length} holding${stocks.length === 1 ? "" : "s"}`}
+            accent="var(--chart-1)"
           />
           <Metric
             label="Target scenario"
-            value={money(totals.projectedValue)}
+            amount={totals.projectedValue}
             sub={`${totals.withTargets} with sell targets`}
+            accent="var(--chart-2)"
           />
           <Metric
             label="Potential difference"
-            value={money(totals.potential)}
+            amount={totals.potential}
             sub="Against amount invested"
             positive={totals.potential > 0}
+            accent="var(--chart-3)"
           />
           <Metric
             label="Potential return"
-            value={`${number(totals.percentage)}%`}
+            amount={totals.percentage}
+            suffix="%"
             sub="Based on sell targets"
             positive={totals.percentage > 0}
+            accent="var(--chart-4)"
+          />
+          <Metric
+            label="XIRR"
+            amount={xirr ?? 0}
+            suffix="%"
+            sub={xirr === null ? "Need at least one target" : "Annualized, money-weighted"}
+            positive={(xirr ?? 0) > 0}
+            icon={<Gauge className="size-3.5" />}
+            accent="var(--chart-5)"
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Target scenarios are estimates, not live portfolio valuations or guaranteed returns.
+          Target scenarios are estimates, not live portfolio valuations or guaranteed returns. XIRR
+          is a money-weighted estimate based on buy dates and target-scenario value.
         </p>
+        {stocks.length > 0 && (
+          <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+            <GoalProgress userId={user.id} projectedValue={totals.projectedValue} />
+            <AllocationChart stocks={stocks} />
+          </div>
+        )}
         <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold">
@@ -572,11 +598,12 @@ function Portfolio({
           <p className="py-20 text-center text-muted-foreground">No holdings match your search.</p>
         ) : (
           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((stock) => (
+            {filtered.map((stock, i) => (
               <Holding
                 key={stock.id}
                 stock={stock}
                 quote={quotes[stock.id]}
+                index={i}
                 onEdit={() => setEditor(stock)}
                 onChange={load}
               />
@@ -601,22 +628,37 @@ function Portfolio({
 }
 function Metric({
   label,
-  value,
+  amount,
+  suffix = "",
   sub,
   positive,
+  accent,
+  icon,
 }: {
   label: string;
-  value: string;
+  /** Raw numeric value to animate; money amounts are formatted, percentages use `suffix="%"`. */
+  amount: number;
+  suffix?: string;
   sub: string;
   positive?: boolean;
+  accent?: string;
+  icon?: ReactNode;
 }) {
+  const animated = useCountUp(amount);
+  const display = suffix === "%" ? `${number(animated)}%` : money(animated);
   return (
-    <div className="min-w-0 bg-card p-6">
-      <p className="text-xs font-medium uppercase text-muted-foreground">{label}</p>
+    <div
+      className="metric-tile min-w-0 bg-card p-6"
+      style={accent ? ({ "--accent-bar": accent } as CSSProperties) : undefined}
+    >
+      <p className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+        {icon}
+        {label}
+      </p>
       <p
-        className={`mt-3 break-words text-2xl font-semibold sm:text-3xl ${positive ? "text-profit" : ""}`}
+        className={`mt-3 break-words text-2xl font-semibold tabular-nums sm:text-3xl ${positive ? "text-profit" : ""}`}
       >
-        {value}
+        {display}
       </p>
       <p className="mt-2 text-xs text-muted-foreground">{sub}</p>
     </div>
@@ -625,11 +667,13 @@ function Metric({
 function Holding({
   stock,
   quote,
+  index,
   onEdit,
   onChange,
 }: {
   stock: Stock;
   quote: { price: number; date: string } | undefined;
+  index: number;
   onEdit: () => void;
   onChange: () => void;
 }) {
@@ -637,6 +681,11 @@ function Holding({
   const plans = targets(stock);
   const scenario = projected(stock);
   const difference = scenario === null ? null : scenario - Number(stock.invested_amount);
+  const targetedShares = plans.reduce((sum, p) => sum + Math.max(0, p.stocks), 0);
+  const targetProgress =
+    Number(stock.buy_stocks) > 0
+      ? Math.min(100, (targetedShares / Number(stock.buy_stocks)) * 100)
+      : 0;
   async function remove() {
     if (!window.confirm(`Delete ${stock.stock_name}?`)) return;
     setDeleting(true);
@@ -649,7 +698,12 @@ function Holding({
     setDeleting(false);
   }
   return (
-    <article className="flex min-w-0 flex-col border border-border bg-card p-5 transition-colors hover:border-primary/40">
+    <article
+      className={`holding-card fade-in-up flex min-w-0 flex-col border border-border bg-card p-5 pl-6 ${
+        difference === null ? "" : difference >= 0 ? "holding-card--profit" : "holding-card--loss"
+      }`}
+      style={{ animationDelay: `${Math.min(index, 10) * 40}ms` }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-lg font-semibold" title={stock.stock_name}>
@@ -719,10 +773,22 @@ function Holding({
         )}
       </div>
       {plans.length > 0 && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          {plans.length} sell target{plans.length === 1 ? "" : "s"} ·{" "}
-          {plans.map((p) => `${number(p.stocks)} at ${money(p.price)}`).join(" · ")}
-        </p>
+        <>
+          <p className="mt-3 text-xs text-muted-foreground">
+            {plans.length} sell target{plans.length === 1 ? "" : "s"} ·{" "}
+            {plans.map((p) => `${number(p.stocks)} at ${money(p.price)}`).join(" · ")}
+          </p>
+          <div
+            className="target-progress-track mt-2"
+            role="progressbar"
+            aria-label="Shares allocated to sell targets"
+            aria-valuenow={Math.round(targetProgress)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="target-progress-fill" style={{ width: `${targetProgress}%` }} />
+          </div>
+        </>
       )}
       {quote && (
         <div className="mt-4 flex justify-between gap-2 bg-secondary px-3 py-2 text-xs">

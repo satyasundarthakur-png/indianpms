@@ -186,6 +186,185 @@
   }
 }
 
+/* ----------------------------------------------------------------------
+ * Colorful / animated dashboard additions
+ * -------------------------------------------------------------------- */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes gradient-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes ring-pop {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.fade-in-up {
+  animation: fade-in-up 0.5s ease-out both;
+}
+
+/* Hero metric strip: a subtle animated gradient wash + colorful accent bar per tile. */
+.metric-strip {
+  position: relative;
+  background:
+    linear-gradient(
+      120deg,
+      color-mix(in oklch, var(--chart-1) 10%, transparent) 0%,
+      transparent 35%
+    ),
+    linear-gradient(
+      240deg,
+      color-mix(in oklch, var(--chart-2) 12%, transparent) 0%,
+      transparent 40%
+    );
+  background-size: 200% 200%;
+  animation: gradient-pan 18s ease-in-out infinite;
+}
+
+.metric-tile {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease;
+}
+.metric-tile:hover {
+  transform: translateY(-2px);
+}
+.metric-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent-bar, var(--primary));
+}
+
+/* Holding cards: staggered entrance + colorful left accent by P/L state. */
+.holding-card {
+  position: relative;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.holding-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px -8px color-mix(in oklch, var(--foreground) 18%, transparent);
+}
+.holding-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  border-radius: 4px 0 0 4px;
+  background: var(--accent-bar, var(--border));
+}
+.holding-card--profit::before {
+  background: linear-gradient(to bottom, var(--chart-2), var(--profit));
+}
+.holding-card--loss::before {
+  background: linear-gradient(
+    to bottom,
+    var(--destructive),
+    color-mix(in oklch, var(--destructive) 70%, black)
+  );
+}
+
+/* Per-holding target-progress bar */
+.target-progress-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+  overflow: hidden;
+}
+.target-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--chart-2), var(--primary));
+  transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Allocation donut card */
+.allocation-card {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 1.25rem;
+  border-radius: var(--radius-lg);
+}
+
+/* Goal progress ring */
+.goal-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--chart-4) 14%, var(--card)),
+    var(--card)
+  );
+  padding: 1.25rem;
+  border-radius: var(--radius-lg);
+}
+.goal-card--empty {
+  display: block;
+  background: var(--card);
+}
+.goal-ring {
+  width: 72px;
+  height: 72px;
+  shrink: 0;
+  animation: ring-pop 0.4s ease-out both;
+  transform: rotate(-90deg);
+}
+.goal-ring-track {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 9;
+}
+.goal-ring-fill {
+  fill: none;
+  stroke: var(--chart-4);
+  stroke-width: 9;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+.goal-card-body {
+  min-width: 0;
+  flex: 1;
+}
+.goal-card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
