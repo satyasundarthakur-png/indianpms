@@ -28,6 +28,7 @@ export const getPortfolioInsight = createServerFn({ method: "POST" })
       .object({
         question: z.string().max(500).optional(),
         provider: z.enum(AI_PROVIDER_IDS).optional(),
+        apiKey: z.string().trim().min(1).max(512).optional(),
       })
       .parse(input),
   )
@@ -53,19 +54,17 @@ export const getPortfolioInsight = createServerFn({ method: "POST" })
     const { getProviderConfig } = await import("./ai-providers.server");
     const requested: AiProviderId | undefined = data.provider;
     const chosen = requested ?? AI_PROVIDER_IDS.find((id) => getProviderConfig(id) !== null);
-    const config = chosen ? getProviderConfig(chosen) : null;
-    if (!config) throw new Error("AI insights aren't configured for this provider yet.");
+    const config = chosen ? getProviderConfig(chosen, data.apiKey) : null;
+    if (!config) throw new Error("Paste your provider key to analyze this portfolio.");
     const { createOpenAI } = await import("@ai-sdk/openai");
-    const { generateText } = await import("ai");
+    const { streamText } = await import("ai");
     // Gemini and Groq both expose OpenAI-compatible chat-completions endpoints.
     const provider = createOpenAI({ baseURL: config.baseURL, apiKey: config.apiKey });
     let text: string;
     try {
-      ({ text } = await generateText({
+      const result = streamText({
         model: provider.chat(config.model),
-        maxRetries: 1,
-        maxOutputTokens: 700,
-        abortSignal: AbortSignal.timeout(30_000),
+        maxRetries: 0,
         system:
           "You are a careful portfolio commentary assistant for an Indian retail investor. All data is already calculated. Never invent live prices, guarantees or new figures. Explicitly distinguish target-based projections from actual returns and note when targets are missing. Highlight allocation and concentration risks when relevant. Respond in plain English, briefly (under 180 words), use ₹. End with: This is educational commentary, not investment advice.",
         prompt: JSON.stringify({
@@ -75,11 +74,14 @@ export const getPortfolioInsight = createServerFn({ method: "POST" })
             data.question ||
             "Summarize this portfolio, its target scenarios, and main concentration risks.",
         }),
-      }));
+      });
+      text = await result.text;
     } catch (error) {
-      // Log the real cause server-side; show only a generic message to the user.
-      console.error("AI insight request failed", error);
-      throw new Error("The AI provider didn't respond. Try again, or choose another model.");
+      // SDK errors can include request headers; never log an error containing a pasted key.
+      const status = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
+      if (status === 401 || status === 403) throw new Error("The provider rejected this key. Check your key and account access.");
+      if (status === 429) throw new Error("The provider is rate-limiting requests. Please try again later.");
+      throw new Error("The AI provider couldn't complete this request. Check your key and try again.");
     }
     if (!text.trim()) throw new Error("No insight was returned. Please try again.");
     return text.trim();
