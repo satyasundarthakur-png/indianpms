@@ -19,18 +19,20 @@ bunx tsc --noEmit
 
 ## AI insights (optional)
 
-The "AI insights" button works with whichever providers you configure as
-**server-side secrets** (never commit them or expose them to the browser). The
-user picks from the configured providers in the dialog; unconfigured ones show
-as "not set up".
+The "AI insights" button lets the user choose Gemini or Groq. The key can come
+from a **server-side secret** (set once for everyone; never commit it) or be
+pasted by the user in the dialog, in which case it is used for that request only
+and is never stored.
 
-| Provider              | Secrets                                                             |
-| --------------------- | ------------------------------------------------------------------- |
-| Gemini 2.5 Flash Lite | `GEMINI_API_KEY` (optional `GEMINI_MODEL` to override the model id) |
-| Groq                  | `GROQ_API_KEY` and `GROQ_MODEL` (the Groq model id to use)          |
+| Provider              | Secrets                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| Gemini 2.5 Flash Lite | `GEMINI_API_KEY` (optional `GEMINI_MODEL` to override the model id)   |
+| Groq                  | `GROQ_API_KEY` (optional `GROQ_MODEL`; default `openai/gpt-oss-120b`) |
 
 Both are called through their OpenAI-compatible endpoints. Only your holdings
-and totals are sent to the provider you choose.
+and totals are sent to the provider you choose. Groq retires models often, so if
+requests start failing with a "model decommissioned" error, check
+<https://console.groq.com/docs/deprecations> and set `GROQ_MODEL`.
 
 ## Notes
 
